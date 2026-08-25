@@ -40,7 +40,7 @@ with st.sidebar:
             "Small fallback list (fast/offline-safe)",
             "Custom list",
         ],
-        index=2,
+        index=1,
     )
 
     max_price = None
@@ -64,7 +64,7 @@ with st.sidebar:
         st.caption(f"{len(tickers)} tickers loaded")
 
     st.header("Momentum Screen Settings")
-    min_rs_rank = st.slider("Minimum RS Rank (percentile)", 50, 99, 80)
+    min_rs_rank = st.slider("Minimum RS Rank (percentile)", 50, 99, 60)
     period = st.selectbox("Price history window", ["3mo", "6mo", "1y"], index=1)
 
     run_button = st.button("Run Screen", type="primary", use_container_width=True)
