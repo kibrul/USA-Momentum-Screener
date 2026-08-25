@@ -40,7 +40,7 @@ with st.sidebar:
             "Small fallback list (fast/offline-safe)",
             "Custom list",
         ],
-        index=1,
+        index=0,
     )
 
     max_price = None
