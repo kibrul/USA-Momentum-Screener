@@ -23,6 +23,7 @@ from utils.data import (
 from utils.breadth import compute_breadth_stats, breadth_regime_label
 from utils.momentum import build_momentum_screen
 from utils.live import is_market_open, fetch_live_snapshot, compute_live_breadth
+from utils.volume_spike import build_volume_spike_screen
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -143,8 +144,9 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_live = st.tabs(
-        ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)", "🔴 Live (intraday)"]
+    tab_breadth, tab_momentum, tab_vol_spike, tab_live = st.tabs(
+        ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
+         "📈 Volume Spike Scan", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -219,6 +221,41 @@ if st.session_state.get("fetched"):
             st.caption(
                 "ADR% (Average Daily Range) is Qullamaggie's standard volatility measure — commonly used "
                 "to size stops as a fraction of ADR% rather than a fixed percentage."
+            )
+
+    # ---------------- Volume Spike tab ----------------
+    with tab_vol_spike:
+        st.subheader("Single-Day Volume Spike Scan")
+        st.caption(
+            "Flags stocks where at least ONE individual day within the lookback window hit the volume "
+            "threshold — checked day by day, not as an average. A stock with one huge day and otherwise "
+            "quiet volume still qualifies, even though its average volume over the same window is low."
+        )
+
+        vc1, vc2 = st.columns(2)
+        with vc1:
+            spike_window = st.number_input("Lookback window (trading days)", min_value=2, max_value=60, value=9)
+        with vc2:
+            spike_threshold = st.number_input(
+                "Volume threshold (single day)", min_value=0, value=9_000_000, step=500_000, format="%d"
+            )
+
+        vol_spike_df = build_volume_spike_screen(price_data, window=int(spike_window), threshold=spike_threshold)
+
+        if vol_spike_df.empty:
+            st.warning(
+                f"No tickers had a single day with volume ≥ {spike_threshold:,} within the last "
+                f"{spike_window} trading days."
+            )
+        else:
+            st.success(
+                f"{len(vol_spike_df)} tickers had at least one day with volume ≥ {spike_threshold:,} "
+                f"within the last {spike_window} trading days."
+            )
+            st.dataframe(vol_spike_df, use_container_width=True, height=500)
+            st.caption(
+                "'Days Ago' counts back from the most recent bar in the window (0 = most recent day). "
+                "'Spike Count' is how many separate days in the window individually cleared the threshold."
             )
 
     # ---------------- Live tab ----------------
