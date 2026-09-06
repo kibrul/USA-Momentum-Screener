@@ -24,6 +24,7 @@ from utils.breadth import compute_breadth_stats, breadth_regime_label
 from utils.momentum import build_momentum_screen
 from utils.live import is_market_open, fetch_live_snapshot, compute_live_breadth
 from utils.volume_spike import build_volume_spike_screen
+from utils.narrow_range_spike import build_narrow_range_spike_screen, DEFAULT_MAX_ABS_PCT
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -144,9 +145,9 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_vol_spike, tab_live = st.tabs(
+    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
-         "📈 Volume Spike Scan", "🔴 Live (intraday)"]
+         "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -257,6 +258,70 @@ if st.session_state.get("fetched"):
                 "'Days Ago' counts back from the most recent bar in the window (0 = most recent day). "
                 "'Spike Count' is how many separate days in the window individually cleared the threshold."
             )
+
+    # ---------------- Narrow Range Volume Spike tab ----------------
+    with tab_narrow_range:
+        st.subheader("Narrow Range Volume Spike Scan")
+        st.caption(
+            "Flags a high-volume day where price barely moved — a possible quiet accumulation/"
+            "distribution signal (size traded without pushing price around), as opposed to a spike "
+            "that comes with a big directional move."
+        )
+
+        nr_mode_label = st.radio(
+            "Pattern to look for",
+            [
+                "Spike day itself was narrow-range (high volume, that day didn't move much)",
+                "Spike happened recently, and the most recent day is narrow-range now (quiet after the spike)",
+            ],
+            index=0,
+        )
+        nr_mode = "spike_day" if nr_mode_label.startswith("Spike day itself") else "most_recent_day"
+
+        nc1, nc2, nc3 = st.columns(3)
+        with nc1:
+            nr_window = st.number_input("Lookback window (trading days)", min_value=2, max_value=60, value=9, key="nr_window")
+        with nc2:
+            nr_vol_threshold = st.number_input(
+                "Volume threshold (single day)", min_value=0, value=9_000_000, step=500_000,
+                format="%d", key="nr_vol_threshold",
+            )
+        with nc3:
+            nr_max_pct = st.number_input(
+                "Narrow-range band (± %, Open→Close)", min_value=0.1, max_value=20.0,
+                value=DEFAULT_MAX_ABS_PCT, step=0.1, key="nr_max_pct",
+            )
+
+        st.caption(
+            f"\"Narrow range\" means the day's Open→Close % change stayed within ±{nr_max_pct}% — "
+            f"this is the day's own move, not the High-Low range (that's covered by the Momentum "
+            f"tab's Tight Base / ADR% instead)."
+        )
+
+        nr_df = build_narrow_range_spike_screen(
+            price_data, mode=nr_mode, window=int(nr_window),
+            volume_threshold=nr_vol_threshold, max_abs_pct=nr_max_pct,
+        )
+
+        if nr_df.empty:
+            st.warning(
+                f"No tickers matched this pattern within the last {nr_window} trading days. "
+                f"Try widening the narrow-range band or lowering the volume threshold."
+            )
+        else:
+            st.success(f"{len(nr_df)} tickers matched this pattern.")
+            st.dataframe(nr_df, use_container_width=True, height=500)
+            if nr_mode == "spike_day":
+                st.caption(
+                    "Shows the most recent day (within the window) that had BOTH a volume spike AND "
+                    "a narrow Open→Close range on that same day."
+                )
+            else:
+                st.caption(
+                    "Shows tickers where a volume spike occurred at some point in the window, and the "
+                    "MOST RECENT day is now sitting in a narrow range — the spike and the quiet day can "
+                    "be different days."
+                )
 
     # ---------------- Live tab ----------------
     with tab_live:
