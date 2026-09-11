@@ -25,6 +25,7 @@ from utils.momentum import build_momentum_screen
 from utils.live import is_market_open, fetch_live_snapshot, compute_live_breadth
 from utils.volume_spike import build_volume_spike_screen
 from utils.narrow_range_spike import build_narrow_range_spike_screen, DEFAULT_MAX_ABS_PCT
+from utils.tendon_pattern import build_tendon_screen, compute_ma9, DEFAULT_WINDOW as TENDON_DEFAULT_WINDOW
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -145,9 +146,9 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_live = st.tabs(
+    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
-         "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🔴 Live (intraday)"]
+         "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -321,6 +322,73 @@ if st.session_state.get("fetched"):
                     "Shows tickers where a volume spike occurred at some point in the window, and the "
                     "MOST RECENT day is now sitting in a narrow range — the spike and the quiet day can "
                     "be different days."
+                )
+
+    # ---------------- Tendon Pattern tab ----------------
+    with tab_tendon:
+        st.subheader("Tendon Pattern Scan")
+        st.caption(
+            "Looks for a V/U-shaped decline-then-recovery in the 9-day SMA of Close within a rolling "
+            "window, followed AFTER the recovery by a flat, sideways consolidation — the shape: "
+            "rise → peak → rounded trough → recovery to a new high → flat tail."
+        )
+
+        tc1, tc2 = st.columns(2)
+        with tc1:
+            tendon_window = st.number_input(
+                "Rolling window (trading days, ~3 months = 63)", min_value=20, max_value=252,
+                value=TENDON_DEFAULT_WINDOW, key="tendon_window",
+            )
+            tendon_min_decline = st.number_input(
+                "Minimum decline into trough (%)", min_value=1.0, max_value=80.0, value=8.0, step=1.0,
+                key="tendon_min_decline",
+            )
+            tendon_min_recovery = st.number_input(
+                "Minimum recovery out of trough (%)", min_value=1.0, max_value=200.0, value=8.0, step=1.0,
+                key="tendon_min_recovery",
+            )
+        with tc2:
+            tendon_consolidation_window = st.number_input(
+                "Consolidation tail length (trading days)", min_value=3, max_value=60, value=12,
+                key="tendon_consolidation_window",
+            )
+            tendon_max_range = st.number_input(
+                "Max consolidation range (%, tighter = flatter)", min_value=0.5, max_value=30.0,
+                value=5.0, step=0.5, key="tendon_max_range",
+            )
+
+        tendon_df, tendon_matches = build_tendon_screen(
+            price_data, window=int(tendon_window), min_decline_pct=tendon_min_decline,
+            min_recovery_pct=tendon_min_recovery, consolidation_window=int(tendon_consolidation_window),
+            max_consolidation_range_pct=tendon_max_range,
+        )
+
+        if tendon_df.empty:
+            st.warning(
+                "No tickers matched this pattern. Try loosening the decline/recovery minimums or "
+                "widening the consolidation range."
+            )
+        else:
+            st.success(f"{len(tendon_df)} tickers matched the Tendon pattern.")
+            st.dataframe(tendon_df, use_container_width=True, height=400)
+            st.caption(
+                "'Consolidation Range %' is how tight the flat tail is (lower = flatter). "
+                "'Days Since Peak' is how many trading days ago the recovery peak occurred."
+            )
+
+            st.divider()
+            st.subheader("Visual confirmation")
+            chosen_ticker = st.selectbox("Preview MA9 for a matched ticker", tendon_df["Ticker"].tolist())
+            if chosen_ticker:
+                match = tendon_matches[chosen_ticker]
+                ma_series = match["ma9_series"]
+                chart_df = pd.DataFrame({"MA9": ma_series})
+                st.line_chart(chart_df, height=300)
+                st.caption(
+                    f"Trough: {match['trough_date'].strftime('%Y-%m-%d') if hasattr(match['trough_date'], 'strftime') else match['trough_date']} · "
+                    f"Recovery peak: {match['post_peak_date'].strftime('%Y-%m-%d') if hasattr(match['post_peak_date'], 'strftime') else match['post_peak_date']} · "
+                    f"Decline {match['decline_pct']}% · Recovery {match['recovery_pct']}% · "
+                    f"Consolidation range {match['consolidation_range_pct']}%"
                 )
 
     # ---------------- Live tab ----------------
