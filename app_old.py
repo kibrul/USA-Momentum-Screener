@@ -26,7 +26,6 @@ from utils.live import is_market_open, fetch_live_snapshot, compute_live_breadth
 from utils.volume_spike import build_volume_spike_screen
 from utils.narrow_range_spike import build_narrow_range_spike_screen, DEFAULT_MAX_ABS_PCT
 from utils.tendon_pattern import build_tendon_screen, compute_ma9, DEFAULT_WINDOW as TENDON_DEFAULT_WINDOW
-from utils.bullish_pin_bar import build_bullish_pin_bar_screen, DEFAULT_WINDOW as PIN_BAR_DEFAULT_WINDOW
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -44,7 +43,7 @@ with st.sidebar:
             "Small fallback list (fast/offline-safe)",
             "Custom list",
         ],
-        index=2,
+        index=0,
     )
 
     max_price = None
@@ -68,7 +67,7 @@ with st.sidebar:
         st.caption(f"{len(tickers)} tickers loaded")
 
     st.header("Momentum Screen Settings")
-    min_rs_rank = st.slider("Minimum RS Rank (percentile)", 50, 99, 80)
+    min_rs_rank = st.slider("Minimum RS Rank (percentile)", 50, 99, 60)
     period = st.selectbox("Price history window", ["3mo", "6mo", "1y"], index=1)
 
     run_button = st.button("Run Screen", type="primary", use_container_width=True)
@@ -147,10 +146,9 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_live = st.tabs(
+    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
-         "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern",
-         "🔨 Bullish Pin Bar", "🔴 Live (intraday)"]
+         "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -392,66 +390,6 @@ if st.session_state.get("fetched"):
                     f"Decline {match['decline_pct']}% · Recovery {match['recovery_pct']}% · "
                     f"Consolidation range {match['consolidation_range_pct']}%"
                 )
-
-    # ---------------- Bullish Pin Bar tab ----------------
-    with tab_pin_bar:
-        st.subheader("Bullish Pin Bar Scan")
-        st.caption(
-            "Looks for a bullish pin bar / hammer candle on any single day within the last few "
-            "trading days: a small real body sitting near the top of the day's range, a long lower "
-            "wick (rejection of the low), and volume confirming (that day's volume ≥ the prior day's)."
-        )
-
-        pb1, pb2 = st.columns(2)
-        with pb1:
-            pin_window = st.number_input(
-                "Lookback window (trading days)", min_value=1, max_value=20,
-                value=PIN_BAR_DEFAULT_WINDOW, key="pin_window",
-            )
-            pin_min_lower_wick = st.number_input(
-                "Minimum lower wick (% of day's range)", min_value=20.0, max_value=95.0,
-                value=66.67, step=1.0, key="pin_min_lower_wick",
-            )
-        with pb2:
-            pin_max_upper_wick = st.number_input(
-                "Maximum upper wick (% of day's range, keeps body near the top)", min_value=1.0,
-                max_value=40.0, value=10.0, step=1.0, key="pin_max_upper_wick",
-            )
-            pin_max_body = st.number_input(
-                "Maximum body size (% of day's range)", min_value=5.0, max_value=50.0,
-                value=33.0, step=1.0, key="pin_max_body",
-            )
-
-        pb3, pb4 = st.columns(2)
-        with pb3:
-            pin_require_green = st.checkbox(
-                "Require green body (Close > Open)", value=True, key="pin_require_green",
-                help="Uncheck to also allow a red body, as long as the wick/body shape still qualifies.",
-            )
-        with pb4:
-            pin_require_volume = st.checkbox(
-                "Require volume ≥ prior day", value=True, key="pin_require_volume",
-            )
-
-        pin_df = build_bullish_pin_bar_screen(
-            price_data, window=int(pin_window), min_lower_wick_pct=pin_min_lower_wick,
-            max_upper_wick_pct=pin_max_upper_wick, max_body_pct=pin_max_body,
-            require_green_body=pin_require_green, require_volume_confirmation=pin_require_volume,
-        )
-
-        if pin_df.empty:
-            st.warning(
-                "No tickers matched this pattern within the lookback window. Try loosening the "
-                "wick/body thresholds or unchecking the volume/green-body requirements."
-            )
-        else:
-            st.success(f"{len(pin_df)} tickers had a qualifying bullish pin bar within the last {pin_window} trading days.")
-            st.dataframe(pin_df, use_container_width=True, height=500)
-            st.caption(
-                "'Days Ago' counts back from the most recent bar (0 = most recent day). "
-                "'Lower Wick %' / 'Upper Wick %' / 'Body %' are each as a share of that day's total "
-                "High-Low range, and sum to 100%."
-            )
 
     # ---------------- Live tab ----------------
     with tab_live:
