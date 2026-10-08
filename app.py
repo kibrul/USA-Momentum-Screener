@@ -27,6 +27,18 @@ from utils.volume_spike import build_volume_spike_screen
 from utils.narrow_range_spike import build_narrow_range_spike_screen, DEFAULT_MAX_ABS_PCT
 from utils.tendon_pattern import build_tendon_screen, compute_ma9, DEFAULT_WINDOW as TENDON_DEFAULT_WINDOW
 from utils.bullish_pin_bar import build_bullish_pin_bar_screen, DEFAULT_WINDOW as PIN_BAR_DEFAULT_WINDOW
+from utils.pullback_pattern import (
+    build_pullback_screen, pullback_chart_data,
+    DEFAULT_MIN_RUN_DAYS as PB_DEFAULT_MIN_RUN, DEFAULT_MAX_RUN_DAYS as PB_DEFAULT_MAX_RUN,
+    DEFAULT_MAX_PULLBACK_DAYS as PB_DEFAULT_MAX_PULLBACK, DEFAULT_TOUCH_WINDOW as PB_DEFAULT_TOUCH_WINDOW,
+    DEFAULT_TOUCH_TOLERANCE_PCT as PB_DEFAULT_TOLERANCE,
+)
+from utils.anticipation_pattern import (
+    build_anticipation_screen, anticipation_chart_data,
+    DEFAULT_MIN_RUN_DAYS as AN_MIN_RUN, DEFAULT_MAX_RUN_DAYS as AN_MAX_RUN,
+    DEFAULT_MIN_CONSOLIDATION_DAYS as AN_MIN_CONS, DEFAULT_MAX_CONSOLIDATION_DAYS as AN_MAX_CONS,
+    DEFAULT_MAX_RANGE_PCT as AN_MAX_RANGE, DEFAULT_MAX_DROP_FROM_PEAK_PCT as AN_MAX_DROP,
+)
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -147,10 +159,10 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_live = st.tabs(
+    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_pullback, tab_anticipation, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
          "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern",
-         "🔨 Bullish Pin Bar", "🔴 Live (intraday)"]
+         "🔨 Bullish Pin Bar", "🎯 Pullback Pattern", "🔮 Anticipation", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -452,6 +464,166 @@ if st.session_state.get("fetched"):
                 "'Lower Wick %' / 'Upper Wick %' / 'Body %' are each as a share of that day's total "
                 "High-Low range, and sum to 100%."
             )
+
+    # ---------------- Pullback Pattern tab ----------------
+    with tab_pullback:
+        st.subheader("Pullback Pattern Scan")
+        st.caption(
+            "Condition 1: a strong, almost straight-up run of bullish candles (3-9 days by default). "
+            "Condition 2: a pullback that then comes down and touches the 9-day or 18-day simple moving "
+            "average of Close."
+        )
+
+        pb_ma_options = {"Either 9MA or 18MA": "either", "9MA only": "9ma", "18MA only": "18ma"}
+
+        pc1, pc2, pc3 = st.columns(3)
+        with pc1:
+            pb_min_run = st.number_input("Min run length (days)", min_value=2, max_value=30,
+                                         value=PB_DEFAULT_MIN_RUN, key="pb_min_run")
+            pb_touch_window = st.number_input(
+                "Touch must be within the last N bars", min_value=1, max_value=10,
+                value=PB_DEFAULT_TOUCH_WINDOW, key="pb_touch_window",
+                help="1 = the most recent bar only. Raise it to also catch touches from the last few days.",
+            )
+        with pc2:
+            pb_max_run = st.number_input("Max run length (days)", min_value=2, max_value=30,
+                                         value=PB_DEFAULT_MAX_RUN, key="pb_max_run")
+            pb_tolerance = st.number_input(
+                "Touch tolerance (% from the MA)", min_value=0.0, max_value=5.0,
+                value=PB_DEFAULT_TOLERANCE, step=0.1, key="pb_tolerance",
+                help="How close the candle's low must get to the MA to count as a touch.",
+            )
+        with pc3:
+            pb_max_pullback = st.number_input(
+                "Max pullback length (days after the peak)", min_value=1, max_value=15,
+                value=PB_DEFAULT_MAX_PULLBACK, key="pb_max_pullback",
+            )
+            pb_ma_label = st.radio("Pullback must touch", list(pb_ma_options), key="pb_ma_choice")
+
+        pk1, pk2, pk3 = st.columns(3)
+        with pk1:
+            pb_strict = st.checkbox(
+                "Strict run: green candles, higher highs & higher lows", value=True, key="pb_strict",
+                help="Uncheck to only require each candle to close above the prior close "
+                     "(allows an occasional red-bodied candle in the run).",
+            )
+        with pk2:
+            pb_hold = st.checkbox(
+                "Touch candle must close at/above the MA", value=True, key="pb_hold",
+                help="Uncheck to also allow a candle that wicks to the MA but closes below it.",
+            )
+        with pk3:
+            pb_uptrend = st.checkbox(
+                "Require 9MA above 18MA", value=False, key="pb_uptrend",
+                help="Uptrend context, as in the reference chart. Off by default so the scan follows "
+                     "the two conditions exactly.",
+            )
+
+        if pb_min_run > pb_max_run:
+            st.error("Min run length can't be greater than max run length.")
+        else:
+            pb_df = build_pullback_screen(
+                price_data, min_run_days=int(pb_min_run), max_run_days=int(pb_max_run),
+                max_pullback_days=int(pb_max_pullback), touch_window=int(pb_touch_window),
+                touch_tolerance_pct=pb_tolerance, ma_choice=pb_ma_options[pb_ma_label],
+                strict_run=pb_strict, require_close_holds_ma=pb_hold, require_ma_uptrend=pb_uptrend,
+            )
+
+            if pb_df.empty:
+                st.warning(
+                    "No tickers matched. Try raising 'Touch must be within the last N bars', widening the "
+                    "touch tolerance, or unchecking the strict-run / close-holds-the-MA options."
+                )
+            else:
+                st.success(f"{len(pb_df)} tickers matched the pullback pattern.")
+                st.dataframe(pb_df, use_container_width=True, height=450)
+                st.caption(
+                    "'Days Ago' = how many bars ago the MA touch happened (0 = latest bar). 'Run Gain %' is the "
+                    "close-to-close gain over the straight-up run; 'Pullback Depth %' is the drop from the peak "
+                    "bar's high to the pullback's lowest low."
+                )
+
+                st.divider()
+                st.subheader("Visual confirmation")
+                pb_choice = st.selectbox("Preview Close with 9MA / 18MA for a matched ticker",
+                                         pb_df["Ticker"].tolist(), key="pb_preview_ticker")
+                if pb_choice:
+                    st.line_chart(pullback_chart_data(price_data[pb_choice], bars=45), height=300)
+
+    # ---------------- Anticipation tab ----------------
+    with tab_anticipation:
+        st.subheader("Anticipation Pattern Scan")
+        st.caption(
+            "Condition 1: price goes almost straight up for 3-9 days. Condition 2: it then moves sideways in a "
+            "very narrow range for 3-9 days, still in progress on the latest bar. The tight base near the highs "
+            "is the coil that anticipates the next move. Bases containing zero-volume (no-trade) days are "
+            "skipped."
+        )
+
+        an1, an2, an3 = st.columns(3)
+        with an1:
+            an_min_run = st.number_input("Min run length (days)", min_value=2, max_value=30,
+                                         value=AN_MIN_RUN, key="an_min_run")
+            an_max_run = st.number_input("Max run length (days)", min_value=2, max_value=30,
+                                         value=AN_MAX_RUN, key="an_max_run")
+        with an2:
+            an_min_cons = st.number_input("Min consolidation (days)", min_value=2, max_value=30,
+                                          value=AN_MIN_CONS, key="an_min_cons")
+            an_max_cons = st.number_input("Max consolidation (days)", min_value=2, max_value=30,
+                                          value=AN_MAX_CONS, key="an_max_cons")
+        with an3:
+            an_max_range = st.number_input(
+                "Max box range (%, tighter = narrower)", min_value=0.2, max_value=15.0,
+                value=AN_MAX_RANGE, step=0.1, key="an_max_range",
+                help="Whole consolidation box: highest High vs lowest Low.",
+            )
+            an_max_drop = st.number_input(
+                "Max give-back from peak close (%)", min_value=0.0, max_value=15.0,
+                value=AN_MAX_DROP, step=0.5, key="an_max_drop",
+                help="Keeps the base up near the highs, so 'run, crash, then flat' doesn't match.",
+            )
+
+        an_strict = st.checkbox(
+            "Strict run: green candles, higher highs & higher lows", value=True, key="an_strict",
+            help="Uncheck to only require each candle to close above the prior close "
+                 "(allows an occasional red-bodied candle in the run).",
+        )
+
+        if an_min_run > an_max_run or an_min_cons > an_max_cons:
+            st.error("A minimum can't be greater than its maximum.")
+        else:
+            an_df = build_anticipation_screen(
+                price_data, min_run_days=int(an_min_run), max_run_days=int(an_max_run),
+                min_consolidation_days=int(an_min_cons), max_consolidation_days=int(an_max_cons),
+                max_range_pct=an_max_range, max_drop_from_peak_pct=an_max_drop, strict_run=an_strict,
+            )
+
+            if an_df.empty:
+                st.warning(
+                    "No tickers matched. Try widening the box range, allowing a bigger give-back from the "
+                    "peak, or unchecking the strict-run option."
+                )
+            else:
+                st.success(f"{len(an_df)} tickers matched the anticipation pattern.")
+                st.dataframe(an_df, use_container_width=True, height=450)
+                st.caption(
+                    "Sorted tightest base first. 'Consolidation Range %' is the whole box (highest High vs lowest "
+                    "Low); 'Drop From Peak %' is how far the base's low sits below the peak close; 'To Breakout %' "
+                    "is the distance from the last close up to the box high (the trigger level)."
+                )
+
+                st.divider()
+                st.subheader("Visual confirmation")
+                an_choice = st.selectbox("Preview Close with the consolidation box for a matched ticker",
+                                         an_df["Ticker"].tolist(), key="an_preview_ticker")
+                if an_choice:
+                    row = an_df[an_df["Ticker"] == an_choice].iloc[0]
+                    st.line_chart(
+                        anticipation_chart_data(price_data[an_choice], int(row["Consolidation Days"]),
+                                                float(row["Consolidation High"]), float(row["Consolidation Low"]),
+                                                bars=40),
+                        height=300,
+                    )
 
     # ---------------- Live tab ----------------
     with tab_live:
