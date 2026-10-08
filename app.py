@@ -27,15 +27,12 @@ from utils.volume_spike import build_volume_spike_screen
 from utils.narrow_range_spike import build_narrow_range_spike_screen, DEFAULT_MAX_ABS_PCT
 from utils.tendon_pattern import build_tendon_screen, compute_ma9, DEFAULT_WINDOW as TENDON_DEFAULT_WINDOW
 from utils.bullish_pin_bar import build_bullish_pin_bar_screen, DEFAULT_WINDOW as PIN_BAR_DEFAULT_WINDOW
-<<<<<<< HEAD
 from utils.pullback_pattern import (
     build_pullback_screen, pullback_chart_data,
     DEFAULT_MIN_RUN_DAYS as PB_DEFAULT_MIN_RUN, DEFAULT_MAX_RUN_DAYS as PB_DEFAULT_MAX_RUN,
     DEFAULT_MAX_PULLBACK_DAYS as PB_DEFAULT_MAX_PULLBACK, DEFAULT_TOUCH_WINDOW as PB_DEFAULT_TOUCH_WINDOW,
     DEFAULT_TOUCH_TOLERANCE_PCT as PB_DEFAULT_TOLERANCE,
 )
-=======
->>>>>>> db6ee5fcc2fd0cbbc3b384261967f5e4a5e4d633
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -156,17 +153,10 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-<<<<<<< HEAD
     tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_pullback, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
          "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern",
          "🔨 Bullish Pin Bar", "🎯 Pullback Pattern", "🔴 Live (intraday)"]
-=======
-    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_live = st.tabs(
-        ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
-         "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern",
-         "🔨 Bullish Pin Bar", "🔴 Live (intraday)"]
->>>>>>> db6ee5fcc2fd0cbbc3b384261967f5e4a5e4d633
     )
 
     # ---------------- Breadth tab ----------------
@@ -469,7 +459,6 @@ if st.session_state.get("fetched"):
                 "High-Low range, and sum to 100%."
             )
 
-<<<<<<< HEAD
     # ---------------- Pullback Pattern tab ----------------
     with tab_pullback:
         st.subheader("Pullback Pattern Scan")
@@ -555,8 +544,6 @@ if st.session_state.get("fetched"):
                 if pb_choice:
                     st.line_chart(pullback_chart_data(price_data[pb_choice], bars=45), height=300)
 
-=======
->>>>>>> db6ee5fcc2fd0cbbc3b384261967f5e4a5e4d633
     # ---------------- Live tab ----------------
     with tab_live:
         st.subheader("Live Watchlist Monitor")
