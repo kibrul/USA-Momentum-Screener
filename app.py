@@ -20,6 +20,11 @@ from utils.data import (
     get_sp500_tickers, fetch_price_history, FALLBACK_UNIVERSE,
     fetch_full_listed_universe, filter_equities_only, fetch_last_close_prices,
 )
+try:
+    from utils.data import prices_from_listing
+except ImportError:  # older utils/data.py (no list-supplied prices): every price is fetched from Yahoo, as before
+    def prices_from_listing(universe):
+        return pd.Series(dtype=float)
 from utils.breadth import compute_breadth_stats, breadth_regime_label
 from utils.momentum import build_momentum_screen
 from utils.live import is_market_open, fetch_live_snapshot, compute_live_breadth
@@ -38,6 +43,11 @@ from utils.anticipation_pattern import (
     DEFAULT_MIN_RUN_DAYS as AN_MIN_RUN, DEFAULT_MAX_RUN_DAYS as AN_MAX_RUN,
     DEFAULT_MIN_CONSOLIDATION_DAYS as AN_MIN_CONS, DEFAULT_MAX_CONSOLIDATION_DAYS as AN_MAX_CONS,
     DEFAULT_MAX_RANGE_PCT as AN_MAX_RANGE, DEFAULT_MAX_DROP_FROM_PEAK_PCT as AN_MAX_DROP,
+)
+from utils.gap_up_scan import (
+    build_gap_up_screen, gap_chart_data,
+    DEFAULT_WINDOW as GAP_WINDOW, DEFAULT_MIN_GAP_PCT as GAP_MIN_PCT,
+    DEFAULT_MIN_RVOL as GAP_MIN_RVOL, DEFAULT_MIN_VOLUME as GAP_MIN_VOL,
 )
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
@@ -93,33 +103,42 @@ if run_button:
         raw_universe = fetch_full_listed_universe()
 
         if raw_universe.empty:
-            st.error(
-                "Could not download the symbol directory from any Nasdaq mirror — this is usually "
-                "a network/firewall issue reaching nasdaqtrader.com. Try the S&P 500 or fallback list "
-                "instead, or check your network settings / VPN / corporate firewall."
+            st.warning(
+                "No symbol list could be loaded (the details are shown above). Try again in a minute, or "
+                "pick the S&P 500 / small fallback list in the sidebar for now."
             )
             st.stop()
 
         equities = filter_equities_only(raw_universe)
+        sources = ", ".join(sorted(raw_universe["Source"].unique())) if "Source" in raw_universe else "unknown source"
         status.info(
-            f"Step 1/3 done — {len(raw_universe)} total listed symbols, "
+            f"Step 1/3 done — {len(raw_universe)} listed symbols ({sources}), "
             f"{len(equities)} after filtering to plain equities (no ETFs/warrants/units/preferreds/funds)."
         )
 
-        status.info("Step 2/3 — Fetching last prices to apply the price filter (this is the slow step)...")
-        progress_bar = st.progress(0.0)
-        last_prices = fetch_last_close_prices(
-            equities["YF_Symbol"].tolist(),
-            chunk_size=200,
-            pause_sec=1.0,
-            progress_callback=progress_bar.progress,
-        )
-        progress_bar.empty()
+        # Some symbol-list sources (the GitHub copy) already carry each stock's last price, so the price filter
+        # needs no downloads for those; only symbols without a listed price are fetched from Yahoo (slow step).
+        listing_prices = prices_from_listing(equities)
+        missing = [t for t in equities["YF_Symbol"] if t not in listing_prices.index]
+        if missing:
+            status.info(f"Step 2/3 — Fetching last prices for {len(missing)} symbols the list has no price for "
+                        f"(this is the slow step)...")
+            progress_bar = st.progress(0.0)
+            fetched_prices = fetch_last_close_prices(
+                missing,
+                chunk_size=200,
+                pause_sec=1.0,
+                progress_callback=progress_bar.progress,
+            )
+            progress_bar.empty()
+            price_series = pd.concat([listing_prices, pd.Series(fetched_prices, dtype=float)])
+        else:
+            price_series = listing_prices
 
-        price_series = pd.Series(last_prices)
         survivors = price_series[(price_series >= min_price) & (price_series <= max_price)]
         status.info(
-            f"Step 2/3 done — got prices for {len(price_series)}/{len(equities)} symbols; "
+            f"Step 2/3 done — prices for {len(price_series)}/{len(equities)} symbols "
+            f"({len(listing_prices)} taken straight from the symbol list, no download); "
             f"{len(survivors)} are within ${min_price:.2f}-${max_price:.2f}."
         )
 
@@ -159,10 +178,10 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_pullback, tab_anticipation, tab_live = st.tabs(
+    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_pullback, tab_anticipation, tab_gap, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
          "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern",
-         "🔨 Bullish Pin Bar", "🎯 Pullback Pattern", "🔮 Anticipation", "🔴 Live (intraday)"]
+         "🔨 Bullish Pin Bar", "🎯 Pullback Pattern", "🔮 Anticipation", "⬆️ Gap-Up Scan", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -624,6 +643,88 @@ if st.session_state.get("fetched"):
                                                 bars=40),
                         height=300,
                     )
+
+    # ---------------- Gap-Up Scan tab ----------------
+    with tab_gap:
+        st.subheader("Gap-Up Scan")
+        st.caption(
+            "Finds stocks that gapped up by at least the chosen % in a single day on big volume. A gap is the "
+            "day's OPEN versus the previous close; 'big volume' means that day's volume is at least RVOL times "
+            "its average over the 20 days before it (and, optionally, a minimum share count)."
+        )
+
+        gap_market_open = is_market_open()
+        gap_scope = st.radio(
+            "Check", ["Any day in the last N trading days", "Current day only (latest bar)"],
+            horizontal=True, key="gap_scope",
+        )
+        gap_latest_only = gap_scope.startswith("Current day")
+
+        gc1, gc2, gc3, gc4 = st.columns(4)
+        with gc1:
+            gap_window = st.number_input(
+                "Last N trading days (21 = about 1 month)", min_value=2, max_value=120, value=GAP_WINDOW,
+                key="gap_window", disabled=gap_latest_only,
+            )
+        with gc2:
+            gap_min_pct = st.number_input("Min gap up (%)", min_value=1.0, max_value=100.0, value=GAP_MIN_PCT,
+                                          step=0.5, key="gap_min_pct")
+        with gc3:
+            gap_min_rvol = st.number_input(
+                "Min RVOL (x 20-day avg volume)", min_value=0.0, max_value=50.0, value=GAP_MIN_RVOL,
+                step=0.5, key="gap_min_rvol",
+            )
+        with gc4:
+            gap_min_volume = st.number_input(
+                "Min volume (shares, 0 = off)", min_value=0, value=GAP_MIN_VOL, step=100_000, format="%d",
+                key="gap_min_volume",
+            )
+
+        gap_skip_partial = False
+        if gap_market_open:
+            gap_skip_partial = st.checkbox(
+                "Market is open: don't apply the volume tests to today's unfinished bar", value=True,
+                key="gap_skip_partial",
+                help="Today's volume is only what has traded so far, so RVOL reads low until the close. With this "
+                     "on, a stock that gapped at the open still shows up (its gap % is already final); the "
+                     "table's 'Unfinished Bar' column marks those rows. Earlier days always get the full tests.",
+            )
+            st.info("🟢 The US market is open, so today's bar is in progress. Press **Run Screen** again in the "
+                    "sidebar to refresh today's numbers.")
+
+        gap_df = build_gap_up_screen(
+            price_data, window=int(gap_window), min_gap_pct=gap_min_pct, min_rvol=gap_min_rvol,
+            min_volume=gap_min_volume, latest_only=gap_latest_only,
+            partial_bar_date=(pd.Timestamp.now(tz="America/New_York").date() if gap_skip_partial else None),
+        )
+
+        scope_label = "on the current day" if gap_latest_only else f"in the last {int(gap_window)} trading days"
+        if gap_df.empty:
+            st.warning(
+                f"No tickers gapped up ≥ {gap_min_pct:g}% on ≥ {gap_min_rvol:g}x volume {scope_label}. "
+                "Try a smaller gap, a lower RVOL, or a longer window."
+            )
+        else:
+            st.success(f"{len(gap_df)} tickers gapped up ≥ {gap_min_pct:g}% on ≥ {gap_min_rvol:g}x volume {scope_label}.")
+            st.dataframe(gap_df, use_container_width=True, height=450)
+            st.caption(
+                "One row per ticker, showing its most recent qualifying day (newest first). 'Days Ago' 0 = the "
+                "latest bar. 'Day Change %' is open→close on the gap day (a gap can still fade). 'Since Gap %' is "
+                "the last close versus the gap-day close, i.e. the follow-through since. 'Gap Days' counts how "
+                "many qualifying days the ticker had in the range."
+            )
+
+            st.divider()
+            st.subheader("Visual confirmation")
+            gap_choice = st.selectbox("Preview Close and the pre-gap close for a matched ticker",
+                                      gap_df["Ticker"].tolist(), key="gap_preview_ticker")
+            if gap_choice:
+                grow = gap_df[gap_df["Ticker"] == gap_choice].iloc[0]
+                st.line_chart(
+                    gap_chart_data(price_data[gap_choice], grow["Gap Date"], float(grow["Prev Close"]), bars=60),
+                    height=300,
+                )
+                st.caption("The flat line is the close before the gap; price holding above it means the gap is holding.")
 
     # ---------------- Live tab ----------------
     with tab_live:
