@@ -49,6 +49,12 @@ from utils.gap_up_scan import (
     DEFAULT_WINDOW as GAP_WINDOW, DEFAULT_MIN_GAP_PCT as GAP_MIN_PCT,
     DEFAULT_MIN_RVOL as GAP_MIN_RVOL, DEFAULT_MIN_VOLUME as GAP_MIN_VOL,
 )
+from utils.parabolic_long import (
+    build_parabolic_long_screen, parabolic_chart_data,
+    DEFAULT_FALL_WINDOW as PL_FALL_WINDOW, DEFAULT_MIN_FALL_PCT as PL_MIN_FALL,
+    DEFAULT_MIN_DOWN_DAYS as PL_MIN_DOWN, DEFAULT_MIN_BELOW_MA9_PCT as PL_MIN_BELOW9,
+    DEFAULT_HIGH_WINDOW as PL_HIGH_WINDOW, DEFAULT_MIN_EXTENSION_PCT as PL_MIN_EXT,
+)
 
 st.set_page_config(page_title="Momentum & Breadth Screener", layout="wide")
 
@@ -178,10 +184,10 @@ if st.session_state.get("fetched"):
 
     st.success(f"Loaded data for {len(price_data)} / {universe_attempted} tickers.")
 
-    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_pullback, tab_anticipation, tab_gap, tab_live = st.tabs(
+    tab_breadth, tab_momentum, tab_vol_spike, tab_narrow_range, tab_tendon, tab_pin_bar, tab_pullback, tab_anticipation, tab_gap, tab_parabolic, tab_live = st.tabs(
         ["📊 Market Breadth (Stockbee)", "🚀 Momentum Screener (Qullamaggie)",
          "📈 Volume Spike Scan", "🔍 Narrow Range Volume Spike", "🪢 Tendon Pattern",
-         "🔨 Bullish Pin Bar", "🎯 Pullback Pattern", "🔮 Anticipation", "⬆️ Gap-Up Scan", "🔴 Live (intraday)"]
+         "🔨 Bullish Pin Bar", "🎯 Pullback Pattern", "🔮 Anticipation", "⬆️ Gap-Up Scan", "📉 Parabolic Long", "🔴 Live (intraday)"]
     )
 
     # ---------------- Breadth tab ----------------
@@ -725,6 +731,95 @@ if st.session_state.get("fetched"):
                     height=300,
                 )
                 st.caption("The flat line is the close before the gap; price holding above it means the gap is holding.")
+
+    # ---------------- Parabolic Long tab ----------------
+    with tab_parabolic:
+        st.subheader("Parabolic Long Scan")
+        st.caption(
+            "Finds stocks that have crashed hard, are still falling several days in a row, and sit far below their "
+            "9 and 18 day moving averages and well below their recent high: an exhausted, over-extended sell-off "
+            "that is a candidate for a sharp bounce. This lists the setup; it is not a buy signal. Prices come "
+            "from Yahoo Finance already adjusted for splits and dividends, so those are not mistaken for crashes."
+        )
+
+        pl1, pl2, pl3 = st.columns(3)
+        with pl1:
+            pl_fall_window = st.number_input("Fall window (trading days)", min_value=3, max_value=120,
+                                             value=PL_FALL_WINDOW, key="pl_fall_window",
+                                             help="'Down 50-100%+ in a few days or weeks'.")
+            pl_min_fall = st.number_input("Min fall in that window (%)", min_value=1.0, max_value=100.0,
+                                          value=PL_MIN_FALL, step=1.0, key="pl_min_fall",
+                                          help="Last close versus the highest close in the fall window.")
+        with pl2:
+            pl_min_down = st.number_input("Min consecutive down days", min_value=1, max_value=15,
+                                          value=PL_MIN_DOWN, key="pl_min_down",
+                                          help="Down days in a row ending on the latest bar (3-5+). A flat or no-trade day ends the streak.")
+            pl_min_below9 = st.number_input("Min distance below the 9-day MA (%)", min_value=0.0, max_value=50.0,
+                                            value=PL_MIN_BELOW9, step=0.5, key="pl_min_below9",
+                                            help="3-9% is typical. The price must also be below the 18-day MA.")
+        with pl3:
+            pl_high_window = st.number_input("Recent-high window (trading days)", min_value=5, max_value=250,
+                                             value=PL_HIGH_WINDOW, key="pl_high_window",
+                                             help="Needs enough price history: pick a longer 'Price history window' in the sidebar if this exceeds it.")
+            pl_min_ext = st.number_input("Min extension below the recent high (%)", min_value=1.0, max_value=100.0,
+                                         value=PL_MIN_EXT, step=1.0, key="pl_min_ext",
+                                         help="Last close versus the highest High in the recent-high window.")
+
+        pl_df, pl_funnel = build_parabolic_long_screen(
+            price_data, fall_window=int(pl_fall_window), min_fall_pct=pl_min_fall, min_down_days=int(pl_min_down),
+            min_below_ma9_pct=pl_min_below9, high_window=int(pl_high_window), min_extension_pct=pl_min_ext,
+        )
+
+        if pl_funnel["stocks"] == 0:
+            st.warning("Not enough price history to evaluate any ticker (at least 20 trading days are needed).")
+        else:
+            st.caption(
+                f"Of **{pl_funnel['stocks']}** tickers, how many pass each condition on its own: "
+                f"fell ≥ {pl_min_fall:g}% in {int(pl_fall_window)} days: **{pl_funnel['fall']}** · "
+                f"{int(pl_min_down)}+ down days in a row: **{pl_funnel['down_days']}** · "
+                f"below the 9 and 18 day MAs, ≥ {pl_min_below9:g}% under the 9-day: **{pl_funnel['below_ma']}** · "
+                f"≥ {pl_min_ext:g}% below the {int(pl_high_window)}-day high: **{pl_funnel['extension']}** · "
+                f"**all conditions: {pl_funnel['all']}**."
+            )
+            if pl_df.empty:
+                lf, ls = pl_funnel["largest_fall"], pl_funnel["longest_streak"]
+                st.warning(
+                    "No tickers pass every condition. "
+                    f"The biggest fall in the {int(pl_fall_window)}-day window is {lf[1]:g}% ({lf[0]}) and the longest "
+                    f"down streak is {ls[1]} days ({ls[0]}). The counts above show which condition is blocking the list: "
+                    "relax that one (for example a smaller minimum fall, fewer down days, or a shorter distance below the 9-day MA)."
+                )
+            else:
+                pl_df = pl_df.rename(columns={"Symbol": "Ticker"})
+                st.success(f"{len(pl_df)} tickers pass every condition (biggest fall first).")
+                st.dataframe(
+                    pl_df, hide_index=True, use_container_width=True,
+                    column_config={
+                        "Last Close": st.column_config.NumberColumn("Last Close", format="%.2f"),
+                        "Fall %": st.column_config.NumberColumn("Fall %", format="%.2f%%"),
+                        "Below High %": st.column_config.NumberColumn("Below High %", format="%.2f%%"),
+                        "Down Days": st.column_config.NumberColumn("Down Days", format="%d"),
+                        "Streak Fall %": st.column_config.NumberColumn("Streak Fall %", format="%.2f%%"),
+                        "Below 9MA %": st.column_config.NumberColumn("Below 9MA %", format="%.2f%%"),
+                        "Below 18MA %": st.column_config.NumberColumn("Below 18MA %", format="%.2f%%"),
+                        "Recent High": st.column_config.NumberColumn("Recent High", format="%.2f"),
+                    },
+                )
+                st.caption(
+                    "**Fall %** = the last close versus the highest close in the fall window; **Below High %** = versus the "
+                    "highest High in the recent-high window; **Down Days** = consecutive down closes ending on the latest "
+                    "bar, with **Streak Fall %** the drop over that streak; **Below 9MA % / Below 18MA %** = how far the last "
+                    "close is under each simple moving average of Close. Crashing small caps can be very illiquid or halted, "
+                    "so check the chart and the volume before acting."
+                )
+
+                st.divider()
+                st.subheader("Visual confirmation")
+                pl_choice = st.selectbox("Preview Close with its 9 / 18 day MAs for a matched ticker",
+                                         pl_df["Ticker"].tolist(), key="pl_preview_ticker")
+                if pl_choice:
+                    st.line_chart(parabolic_chart_data(price_data[pl_choice], bars=40), height=300)
+                    st.caption("Close with the 9 and 18 day moving averages (the series the scan used).")
 
     # ---------------- Live tab ----------------
     with tab_live:
